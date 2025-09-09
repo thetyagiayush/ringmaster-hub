@@ -1,20 +1,73 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
-import { MessageSquare, Send, Users } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { MessageSquare, Send, Users, CheckSquare, Square, AlertCircle, CheckCircle } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { mockCallLogs } from '@/services/api';
+import { CallLog } from '@/services/api';
+import axios from 'axios';
 
 export function TextBlastManager() {
   const [message, setMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [uniqueNumbers, setUniqueNumbers] = useState<string[]>([]);
+  const [selectedNumbers, setSelectedNumbers] = useState<string[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [sendProgress, setSendProgress] = useState(0);
+  const [currentBatch, setCurrentBatch] = useState(0);
+  const [totalBatches, setTotalBatches] = useState(0);
+  const [lastSendResult, setLastSendResult] = useState<{
+    sent_count: number;
+    failed_count: number;
+    errors: Array<{phone_number: string; error: string}>;
+  } | null>(null);
   const { toast } = useToast();
 
-  // Get unique phone numbers from call logs
-  const uniqueNumbers = [...new Set(mockCallLogs.map(log => log.phone_number))];
+  useEffect(() => {
+    fetchCallLogs();
+  }, []);
+
+  const fetchCallLogs = async () => {
+    setIsLoadingLogs(true);
+    try {
+      const response = await axios.get('http://localhost:6970/api/v1/calling/get-logs');
+      const allLogs: CallLog[] = response?.data?.data || [];
+      
+      // Get unique phone numbers and not anonymous number
+      const uniquePhoneNumbers = Array.from(new Set(allLogs.map((log) => log.phone_number))).filter(num => num?.toLowerCase() !== 'anonymous');
+      setUniqueNumbers(uniquePhoneNumbers);
+      // Select all by default
+      setSelectedNumbers(uniquePhoneNumbers);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to fetch call logs.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
+
+  const handleSelectAll = () => {
+    if (selectedNumbers.length === uniqueNumbers.length) {
+      setSelectedNumbers([]);
+    } else {
+      setSelectedNumbers([...uniqueNumbers]);
+    }
+  };
+
+  const handleNumberToggle = (number: string) => {
+    setSelectedNumbers(prev => 
+      prev.includes(number) 
+        ? prev.filter(n => n !== number)
+        : [...prev, number]
+    );
+  };
 
   const handleSendBlast = async () => {
     if (!message.trim()) {
@@ -26,24 +79,103 @@ export function TextBlastManager() {
       return;
     }
 
-    setIsLoading(true);
-    try {
-      // Mock sending text blast
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
+    if (selectedNumbers.length === 0) {
       toast({
-        title: 'Text Blast Sent!',
-        description: `Message sent to ${uniqueNumbers.length} recipients.`,
+        title: 'No Recipients Selected',
+        description: 'Please select at least one recipient.',
+        variant: 'destructive',
       });
-      setMessage('');
+      return;
+    }
+
+    // Check message length (SMS limit)
+    if (message.trim().length > 160) {
+      toast({
+        title: 'Message Too Long',
+        description: 'SMS messages should be 160 characters or less for optimal delivery.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const MAX_BATCH_SIZE = 20;
+    const batches = [];
+    for (let i = 0; i < selectedNumbers.length; i += MAX_BATCH_SIZE) {
+      batches.push(selectedNumbers.slice(i, i + MAX_BATCH_SIZE));
+    }
+
+    setIsLoading(true);
+    setSendProgress(0);
+    setCurrentBatch(0);
+    setTotalBatches(batches.length);
+    setLastSendResult(null);
+
+    let totalSent = 0;
+    let totalFailed = 0;
+    let allErrors: Array<{phone_number: string; error: string}> = [];
+
+    try {
+      for (let i = 0; i < batches.length; i++) {
+        setCurrentBatch(i + 1);
+        
+        const response = await axios.post('http://localhost:6970/api/v1/calling/send-blast', {
+          message: message.trim(),
+          phone_numbers: batches[i]
+        });
+        
+        if (response.data.success) {
+          const batchResult = response.data.data;
+          totalSent += batchResult.sent_count;
+          totalFailed += batchResult.failed_count;
+          allErrors = [...allErrors, ...batchResult.errors];
+          
+          // Update progress
+          setSendProgress(Math.round(((i + 1) / batches.length) * 100));
+          
+          // Small delay between batches to avoid overwhelming the server
+          if (i < batches.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } else {
+          throw new Error(response.data.error || 'Batch failed');
+        }
+      }
+
+      // Store results for display
+      setLastSendResult({
+        sent_count: totalSent,
+        failed_count: totalFailed,
+        errors: allErrors
+      });
+
+      // Show summary toast
+      if (totalFailed === 0) {
+        toast({
+          title: 'Text Blast Completed!',
+          description: `Successfully sent ${totalSent} messages.`,
+        });
+      } else {
+        toast({
+          title: 'Text Blast Completed',
+          description: `Sent: ${totalSent}, Failed: ${totalFailed}. Check details below.`,
+          variant: totalSent > 0 ? 'default' : 'destructive',
+        });
+      }
+      
+      if (totalSent > 0) {
+        setMessage('');
+      }
     } catch (error) {
       toast({
         title: 'Error',
-        description: 'Failed to send text blast.',
+        description: 'Failed to send text blast. Please try again.',
         variant: 'destructive',
       });
     } finally {
       setIsLoading(false);
+      setSendProgress(0);
+      setCurrentBatch(0);
+      setTotalBatches(0);
     }
   };
 
@@ -63,7 +195,16 @@ export function TextBlastManager() {
           <Users className="h-5 w-5 text-muted-foreground" />
           <div>
             <p className="text-sm font-medium">Recipients</p>
-            <p className="text-sm text-muted-foreground">{uniqueNumbers.length} unique phone numbers</p>
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">
+                {isLoadingLogs ? 'Loading...' : `${selectedNumbers.length} of ${uniqueNumbers.length} recipients selected`}
+              </p>
+              {selectedNumbers.length > 20 && (
+                <p className="text-xs text-amber-600">
+                  Large batches will be processed in groups of 20 for optimal delivery
+                </p>
+              )}
+            </div>
           </div>
         </div>
 
@@ -77,26 +218,114 @@ export function TextBlastManager() {
             rows={4}
             className="resize-none"
           />
-          <p className="text-sm text-muted-foreground">
+          <p className={`text-sm ${
+            message.length > 160 
+              ? 'text-destructive' 
+              : message.length > 140 
+                ? 'text-yellow-600' 
+                : 'text-muted-foreground'
+          }`}>
             {message.length}/160 characters
+            {message.length > 160 && ' (Too long for SMS)'}
           </p>
         </div>
 
         <div className="space-y-3">
-          <h4 className="text-sm font-medium">Recipients Preview:</h4>
-          <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">
-            {uniqueNumbers.map((number, index) => (
-              <Badge key={index} variant="outline">
-                {number}
-              </Badge>
-            ))}
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-medium">Recipients:</h4>
+            {uniqueNumbers.length > 0 && (
+              <button
+                onClick={handleSelectAll}
+                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {selectedNumbers.length === uniqueNumbers.length ? (
+                  <><CheckSquare className="h-4 w-4" /> Unselect All</>
+                ) : (
+                  <><Square className="h-4 w-4" /> Select All</>
+                )}
+              </button>
+            )}
+          </div>
+          <div className="space-y-2 max-h-32 overflow-y-auto">
+            {isLoadingLogs ? (
+              <p className="text-sm text-muted-foreground">Loading recipients...</p>
+            ) : uniqueNumbers.length > 0 ? (
+              uniqueNumbers.map((number, index) => (
+                <div key={index} className="flex items-center space-x-3">
+                  <Checkbox
+                    id={`number-${index}`}
+                    checked={selectedNumbers.includes(number)}
+                    onCheckedChange={() => handleNumberToggle(number)}
+                  />
+                  <label 
+                    htmlFor={`number-${index}`} 
+                    className="text-sm font-mono cursor-pointer flex-1"
+                  >
+                    {number}
+                  </label>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">No call logs found</p>
+            )}
           </div>
         </div>
+
+        {/* Progress indicator during sending */}
+        {isLoading && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span>Sending messages...</span>
+              <span>{sendProgress}%</span>
+            </div>
+            <Progress value={sendProgress} className="w-full" />
+            {totalBatches > 1 && (
+              <p className="text-sm text-muted-foreground text-center">
+                Processing batch {currentBatch} of {totalBatches}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Results display */}
+        {lastSendResult && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-4">
+              <Alert>
+                <CheckCircle className="h-4 w-4" />
+                <AlertDescription>
+                  <strong>{lastSendResult.sent_count}</strong> messages sent successfully
+                </AlertDescription>
+              </Alert>
+              {lastSendResult.failed_count > 0 && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    <strong>{lastSendResult.failed_count}</strong> messages failed
+                  </AlertDescription>
+                </Alert>
+              )}
+            </div>
+            
+            {lastSendResult.errors.length > 0 && (
+              <div className="space-y-2">
+                <h5 className="text-sm font-medium">Failed Recipients:</h5>
+                <div className="max-h-24 overflow-y-auto space-y-1">
+                  {lastSendResult.errors.map((error, index) => (
+                    <div key={index} className="text-sm text-muted-foreground">
+                      <span className="font-mono">{error.phone_number}</span>: {error.error}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex justify-end">
           <Button 
             onClick={handleSendBlast} 
-            disabled={isLoading || !message.trim()}
+            disabled={isLoading || !message.trim() || selectedNumbers.length === 0 || message.length > 160}
             className="min-w-32"
           >
             {isLoading ? (

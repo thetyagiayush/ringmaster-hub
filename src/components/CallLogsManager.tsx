@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -6,26 +6,58 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Download, Search, Phone } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { CallLog, mockCallLogs } from '@/services/api';
+import { CallLog, apiService } from '@/services/api';
+import axios from 'axios';
 
 export function CallLogsManager() {
-  const [logs, setLogs] = useState<CallLog[]>(mockCallLogs);
+  const [logs, setLogs] = useState<CallLog[]>([]);
+  const [uniqueNumbers, setUniqueNumbers] = useState<CallLog[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
-  const filteredLogs = logs.filter(log => 
-    log.phone_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    log.called.toLowerCase().includes(searchTerm.toLowerCase())
+  useEffect(() => {
+    fetchCallLogs();
+  }, []);
+
+  const fetchCallLogs = async () => {
+    setIsLoading(true);
+    try {
+      const response = await axios.get('http://localhost:6970/api/v1/calling/get-logs');
+      const allLogs = response?.data?.data || [];
+      setLogs(allLogs);
+      
+      // Get unique phone numbers with their latest call date
+      const uniqueNumbersMap = new Map<string, CallLog>();
+      allLogs.forEach((log: CallLog) => {
+        const existing = uniqueNumbersMap.get(log.phone_number);
+        if (!existing || new Date(log.created_at) > new Date(existing.created_at)) {
+          uniqueNumbersMap.set(log.phone_number, log);
+        }
+      });
+      setUniqueNumbers(allLogs);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to fetch call logs.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const filteredLogs = uniqueNumbers.filter(log => 
+    log.phone_number.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const exportToCSV = () => {
-    const headers = ['ID', 'Caller Number', 'Called Number', 'Call Date', 'Call Time'];
+    const headers = ['From', 'To', 'Call Date', 'Call Time'];
     const csvContent = [
       headers.join(','),
       ...filteredLogs.map(log => [
-        log.id,
         log.phone_number,
-        log.called,
+        log.called || 'N/A',
         new Date(log.created_at).toLocaleDateString(),
         new Date(log.created_at).toLocaleTimeString()
       ].join(','))
@@ -57,7 +89,7 @@ export function CallLogsManager() {
               Call Logs
             </CardTitle>
             <CardDescription>
-              View and export call history data
+              View unique caller numbers and their latest call times
             </CardDescription>
           </div>
           <Button onClick={exportToCSV} variant="outline">
@@ -81,42 +113,44 @@ export function CallLogsManager() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Caller Number</TableHead>
-                <TableHead>Called Number</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Time</TableHead>
+                <TableHead>From</TableHead>
+                <TableHead>To</TableHead>
+                <TableHead>Latest Call Date</TableHead>
+                <TableHead>Latest Call Time</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredLogs.map((log) => (
-                <TableRow key={log.id}>
-                  <TableCell>
-                    <Badge variant="outline">{log.phone_number}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{log.called}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    {new Date(log.created_at).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell>
-                    {new Date(log.created_at).toLocaleTimeString()}
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-center">
+                    Loading call logs...
                   </TableCell>
                 </TableRow>
-              ))}
-              {filteredLogs.length === 0 && (
+              ) : (
+                filteredLogs.map((log) => (
+                  <TableRow key={log.id}>
+                    <TableCell>
+                      <Badge variant="outline">{log.phone_number}</Badge>
+                    </TableCell>
+                    <TableCell>{log.called || 'N/A'}</TableCell>
+                    <TableCell>
+                      {new Date(log.created_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell>
+                      {new Date(log.created_at).toLocaleTimeString()}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+              {filteredLogs.length === 0 && !isLoading && (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-muted-foreground">
+                  <TableCell colSpan={3} className="text-center text-muted-foreground">
                     No call logs found matching your search.
                   </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
-        </div>
-
-        <div className="text-sm text-muted-foreground">
-          Showing {filteredLogs.length} of {logs.length} call logs
         </div>
       </CardContent>
     </Card>
