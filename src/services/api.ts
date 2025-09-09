@@ -1,5 +1,5 @@
 // API service for communicating with the backend
-const API_BASE_URL = 'https://www.myapp.com/api/v1/calling';
+const API_BASE_URL = 'https://nytwilio-backend-main-app.vercel.app/api/v1/calling';
 
 export interface NumberMapping {
   id: number;

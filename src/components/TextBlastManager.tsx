@@ -34,7 +34,7 @@ export function TextBlastManager() {
   const fetchCallLogs = async () => {
     setIsLoadingLogs(true);
     try {
-      const response = await axios.get('http://localhost:6970/api/v1/calling/get-logs');
+      const response = await axios.get('https://nytwilio-backend-main-app.vercel.app/api/v1/calling/get-logs');
       const allLogs: CallLog[] = response?.data?.data || [];
       
       // Get unique phone numbers and not anonymous number
@@ -118,7 +118,7 @@ export function TextBlastManager() {
       for (let i = 0; i < batches.length; i++) {
         setCurrentBatch(i + 1);
         
-        const response = await axios.post('http://localhost:6970/api/v1/calling/send-blast', {
+        const response = await axios.post('https://nytwilio-backend-main-app.vercel.app/api/v1/calling/send-blast', {
           message: message.trim(),
           phone_numbers: batches[i]
         });
