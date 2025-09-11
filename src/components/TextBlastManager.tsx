@@ -4,16 +4,26 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { MessageSquare, Send, Users, CheckSquare, Square, AlertCircle, CheckCircle } from 'lucide-react';
+import { MessageSquare, Send, Users, CheckSquare, Square, AlertCircle, CheckCircle, Filter, Plus } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { CallLog } from '@/services/api';
 import axios from 'axios';
 
+interface CustomFilter {
+  id: string;
+  name: string;
+  phoneNumbers: string[];
+}
+
 export function TextBlastManager() {
   const [message, setMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [allCallLogs, setAllCallLogs] = useState<CallLog[]>([]);
   const [uniqueNumbers, setUniqueNumbers] = useState<string[]>([]);
   const [selectedNumbers, setSelectedNumbers] = useState<string[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
@@ -25,17 +35,32 @@ export function TextBlastManager() {
     failed_count: number;
     errors: Array<{phone_number: string; error: string}>;
   } | null>(null);
+  
+  // Filter states
+  const [selectedCalledFilter, setSelectedCalledFilter] = useState<string>('all');
+  const [customFilters, setCustomFilters] = useState<CustomFilter[]>([]);
+  const [selectedCustomFilter, setSelectedCustomFilter] = useState<string>('none');
+  const [isCreateFilterOpen, setIsCreateFilterOpen] = useState(false);
+  const [newFilterName, setNewFilterName] = useState('');
+  const [newFilterNumbers, setNewFilterNumbers] = useState('');
   const { toast } = useToast();
 
   useEffect(() => {
     fetchCallLogs();
+    loadCustomFilters();
   }, []);
+
+  const loadCustomFilters = () => {
+    const filters = JSON.parse(localStorage.getItem('customFilters') || '[]');
+    setCustomFilters(filters);
+  };
 
   const fetchCallLogs = async () => {
     setIsLoadingLogs(true);
     try {
       const response = await axios.get('https://nytwilio-backend-main-app.vercel.app/api/v1/calling/get-logs');
       const allLogs: CallLog[] = response?.data?.data || [];
+      setAllCallLogs(allLogs);
       
       // Get unique phone numbers and not anonymous number
       const uniquePhoneNumbers = Array.from(new Set(allLogs.map((log) => log.phone_number))).filter(num => num?.toLowerCase() !== 'anonymous');
@@ -53,13 +78,92 @@ export function TextBlastManager() {
     }
   };
 
+  // Get available called numbers for filtering
+  const availableCalledNumbers = Array.from(new Set(
+    allCallLogs
+      .filter(log => log.called && log.called.toLowerCase() !== 'anonymous')
+      .map(log => log.called!)
+  ));
+
+  // Get filtered phone numbers based on selected filters
+  const getFilteredNumbers = () => {
+    let filtered = [...uniqueNumbers];
+    
+    // Filter by called number
+    if (selectedCalledFilter !== 'all') {
+      const numbersWhoCalledThis = allCallLogs
+        .filter(log => log.called === selectedCalledFilter)
+        .map(log => log.phone_number);
+      filtered = filtered.filter(num => numbersWhoCalledThis.includes(num));
+    }
+    
+    // Filter by custom filter
+    if (selectedCustomFilter !== 'none') {
+      const customFilter = customFilters.find(f => f.id === selectedCustomFilter);
+      if (customFilter) {
+        filtered = filtered.filter(num => customFilter.phoneNumbers.includes(num));
+      }
+    }
+    
+    return filtered;
+  };
+
+  const filteredNumbers = getFilteredNumbers();
+
   const handleSelectAll = () => {
-    if (selectedNumbers.length === uniqueNumbers.length) {
+    if (selectedNumbers.length === filteredNumbers.length) {
       setSelectedNumbers([]);
     } else {
-      setSelectedNumbers([...uniqueNumbers]);
+      setSelectedNumbers([...filteredNumbers]);
     }
   };
+
+  const handleCreateCustomFilter = () => {
+    if (!newFilterName.trim()) {
+      toast({
+        title: 'Missing Filter Name',
+        description: 'Please provide a name for the filter.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const phoneNumbers = newFilterNumbers
+      .split(/[,\n]/)
+      .map(num => num.trim())
+      .filter(num => num.length > 0);
+
+    if (phoneNumbers.length === 0) {
+      toast({
+        title: 'No Phone Numbers',
+        description: 'Please provide at least one phone number.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const newFilter: CustomFilter = {
+      id: Date.now().toString(),
+      name: newFilterName,
+      phoneNumbers
+    };
+
+    setCustomFilters([...customFilters, newFilter]);
+    setNewFilterName('');
+    setNewFilterNumbers('');
+    setIsCreateFilterOpen(false);
+    
+    toast({
+      title: 'Filter Created',
+      description: `Created filter "${newFilterName}" with ${phoneNumbers.length} numbers.`,
+    });
+  };
+
+  // Update selected numbers when filters change
+  useEffect(() => {
+    const filtered = getFilteredNumbers();
+    setSelectedNumbers(filtered);
+  }, [selectedCalledFilter, selectedCustomFilter, uniqueNumbers, customFilters]);
 
   const handleNumberToggle = (number: string) => {
     setSelectedNumbers(prev => 
@@ -230,15 +334,48 @@ export function TextBlastManager() {
           </p>
         </div>
 
+        {/* Filters Section */}
+        <div className="space-y-4 p-4 bg-muted/50 rounded-lg">
+          <div className="flex items-center gap-2">
+            <Filter className="h-4 w-4" />
+            <h4 className="text-sm font-medium">Filter Recipients</h4>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Filter by Called Number */}
+            <div className="space-y-2">
+              <Label htmlFor="called-filter" className="text-sm">Filter by Number Called</Label>
+              <Select value={selectedCalledFilter} onValueChange={setSelectedCalledFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All numbers" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Numbers ({uniqueNumbers.length})</SelectItem>
+                  {availableCalledNumbers.map((calledNumber) => {
+                    const count = allCallLogs.filter(log => log.called === calledNumber).length;
+                    return (
+                      <SelectItem key={calledNumber} value={calledNumber}>
+                        {calledNumber} ({count} calls)
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-medium">Recipients:</h4>
-            {uniqueNumbers.length > 0 && (
+            <h4 className="text-sm font-medium">
+              Recipients ({filteredNumbers.length} after filters):
+            </h4>
+            {filteredNumbers.length > 0 && (
               <button
                 onClick={handleSelectAll}
                 className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
-                {selectedNumbers.length === uniqueNumbers.length ? (
+                {selectedNumbers.length === filteredNumbers.length ? (
                   <><CheckSquare className="h-4 w-4" /> Unselect All</>
                 ) : (
                   <><Square className="h-4 w-4" /> Select All</>
@@ -249,8 +386,8 @@ export function TextBlastManager() {
           <div className="space-y-2 max-h-32 overflow-y-auto">
             {isLoadingLogs ? (
               <p className="text-sm text-muted-foreground">Loading recipients...</p>
-            ) : uniqueNumbers.length > 0 ? (
-              uniqueNumbers.map((number, index) => (
+            ) : filteredNumbers.length > 0 ? (
+              filteredNumbers.map((number, index) => (
                 <div key={index} className="flex items-center space-x-3">
                   <Checkbox
                     id={`number-${index}`}
@@ -266,7 +403,9 @@ export function TextBlastManager() {
                 </div>
               ))
             ) : (
-              <p className="text-sm text-muted-foreground">No call logs found</p>
+              <p className="text-sm text-muted-foreground">
+                {uniqueNumbers.length === 0 ? 'No call logs found' : 'No numbers match the selected filters'}
+              </p>
             )}
           </div>
         </div>
